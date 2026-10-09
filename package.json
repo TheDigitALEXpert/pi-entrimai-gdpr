@@ -1,0 +1,23 @@
+{
+  "name": "pi-provider-gdpr-inference",
+  "version": "0.1.0",
+  "description": "Pi provider for Entrim — a GDPR-compliant EU inference platform (OpenAI-compatible, live model discovery)",
+  "type": "module",
+  "license": "MIT",
+  "keywords": ["pi-package", "entrim", "llm", "provider", "gdpr", "europe"],
+  "pi": {
+    "extensions": ["./src/extension.ts"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "scripts": {
+    "check": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "typescript": "^5.5.0"
+  }
+}
