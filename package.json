@@ -4,9 +4,27 @@
   "description": "Pi provider for Entrim — a GDPR-compliant EU inference platform (OpenAI-compatible, live model discovery with real per-model pricing)",
   "type": "module",
   "license": "MIT",
-  "keywords": ["pi-package", "entrim", "llm", "provider", "gdpr", "europe", "pricing"],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TheDigitALEXpert/pi-entrimai-gdpr.git"
+  },
+  "bugs": {
+    "url": "https://github.com/TheDigitALEXpert/pi-entrimai-gdpr/issues"
+  },
+  "homepage": "https://github.com/TheDigitALEXpert/pi-entrimai-gdpr#readme",
+  "keywords": [
+    "pi-package",
+    "entrim",
+    "llm",
+    "provider",
+    "gdpr",
+    "europe",
+    "pricing"
+  ],
   "pi": {
-    "extensions": ["./src/extension.ts"]
+    "extensions": [
+      "./src/extension.ts"
+    ]
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
