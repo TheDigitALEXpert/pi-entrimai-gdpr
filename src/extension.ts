@@ -22,7 +22,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { Model } from "@earendil-works/pi-ai";
 
-import { PRICING_URL, priceFor, resolvePrices, UNKNOWN_PRICE, type Price } from "./pricing.ts";
+import { PRICING_URL, priceFor, pricesFromModelList, resolvePrices, UNKNOWN_PRICE, type Price } from "./pricing.ts";
 
 const BASE_URL = "https://api.entrim.ai/v1";
 
@@ -154,15 +154,16 @@ function buildConfig(): ProviderConfig {
 				}[];
 			};
 
-			// `/v1/models` carries no price field, so scrape the pricing page. On
-			// failure this falls back to the committed SNAPSHOT_PRICES rather than
-			// leaving every request unpriced.
-			const { prices, source } = await resolvePrices(context.signal);
+			// `/v1/models` usually carries no price field, so the pricing page is
+			// scraped. If the provider ever starts publishing prices on the API, those
+			// win and the scrape is skipped entirely.
+			const apiPrices = pricesFromModelList(body.data);
+			const { prices, source } = await resolvePrices(context.signal, apiPrices);
 			const { models, unpriced } = mapModels(body.data ?? [], prices);
 
 			if (unpriced.length > 0) {
 				console.warn(
-					`[entrim] no price found for ${unpriced.join(", ")} (pricing source: ${source}). ` +
+					`[entrim] no price found for ${unpriced.join(", ")} (source: ${source}). ` +
 						`These models report tokens without a cost figure. ` +
 						`Check ${PRICING_URL} or update SNAPSHOT_PRICES in src/pricing.ts.`,
 				);

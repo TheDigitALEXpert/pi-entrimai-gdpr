@@ -115,6 +115,93 @@ function toPrice(input: string, output: string, cacheRead?: string): Price {
 	};
 }
 
+/** Accept a rate as either a number or a numeric string; undefined when unusable. */
+function rate(value: unknown): number | undefined {
+	if (typeof value === "number") return Number.isFinite(value) && value >= 0 ? value : undefined;
+	if (typeof value === "string" && value.trim().length > 0) {
+		const n = Number(value);
+		return Number.isFinite(n) && n >= 0 ? n : undefined;
+	}
+	return undefined;
+}
+
+/**
+ * Read a price straight out of a `/v1/models` entry, if the provider publishes
+ * one.
+ *
+ * Entrim does not do this today - the endpoint returns only id, limits,
+ * datacenters and a beta flag - but resellers change their minds, and the
+ * pricing page could be withdrawn or gated at any time. If a model entry ever
+ * carries a usable price, that price is authoritative and live: no HTML scraping
+ * and no snapshot fallback is needed.
+ *
+ * Recognised shapes, covering the conventions LiteLLM and OpenAI-compatible
+ * gateways use:
+ *
+ *   cost:    { input, output, cacheRead, cacheWrite }   (pi's own shape)
+ *   pricing: { input, output, cache_read }              (OpenRouter-style)
+ *   price:   { input, output, ... }
+ *   input_price / output_price / cache_read_price       (flat scalars)
+ *
+ * A price counts as usable only when BOTH input and output are present and
+ * finite: a half-specified price is worse than none, so it is ignored.
+ */
+export function priceFromModelEntry(raw: unknown): Price | undefined {
+	if (!raw || typeof raw !== "object") return undefined;
+	const entry = raw as Record<string, unknown>;
+
+	for (const key of ["cost", "pricing", "price"] as const) {
+		const block = entry[key];
+		if (!block || typeof block !== "object") continue;
+
+		const b = block as Record<string, unknown>;
+		const input = rate(b.input);
+		const output = rate(b.output);
+		if (input === undefined || output === undefined) continue;
+
+		return {
+			input,
+			output,
+			cacheRead: rate(b.cacheRead) ?? rate(b.cache_read) ?? 0,
+			cacheWrite: rate(b.cacheWrite) ?? rate(b.cache_write) ?? 0,
+		};
+	}
+
+	// Flat scalars on the entry itself.
+	const input = rate(entry.input_price ?? entry.inputPrice);
+	const output = rate(entry.output_price ?? entry.outputPrice);
+	if (input === undefined || output === undefined) return undefined;
+
+	return {
+		input,
+		output,
+		cacheRead: rate(entry.cache_read_price ?? entry.cacheReadPrice) ?? 0,
+		cacheWrite: rate(entry.cache_write_price ?? entry.cacheWritePrice) ?? 0,
+	};
+}
+
+/**
+ * Collect prices published by `/v1/models` itself.
+ *
+ * Returns an empty map when the provider publishes no prices (today's Entrim),
+ * which the caller treats as "fall through to scraping". A non-empty result
+ * means the API is authoritative, so the pricing page is never fetched.
+ */
+export function pricesFromModelList(data: unknown): Record<string, Price> {
+	if (!Array.isArray(data)) return {};
+
+	const prices: Record<string, Price> = {};
+	for (const entry of data) {
+		if (!entry || typeof entry !== "object") continue;
+		const id = (entry as { id?: unknown }).id;
+		if (typeof id !== "string" || id.length === 0) continue;
+
+		const price = priceFromModelEntry(entry);
+		if (price) prices[id] = price;
+	}
+	return prices;
+}
+
 /**
  * Parse prices out of the pricing page's RSC payload.
  *
@@ -169,14 +256,28 @@ export async function fetchLivePrices(signal: AbortSignal): Promise<Record<strin
 }
 
 /**
- * Resolve the price table to use: live when available, snapshot otherwise.
+ * Resolve the price table to use.
+ *
+ * Order of preference:
+ *   1. `apiPrices` - prices the provider published on `/v1/models` itself. When
+ *      present these are authoritative and live, so the pricing page is never
+ *      fetched and the snapshot is never consulted.
+ *   2. live scrape of the pricing page.
+ *   3. SNAPSHOT_PRICES.
  *
  * `source` lets callers report which path was taken.
  */
-export async function resolvePrices(signal: AbortSignal): Promise<{
+export async function resolvePrices(
+	signal: AbortSignal,
+	apiPrices?: Record<string, Price>,
+): Promise<{
 	prices: Record<string, Price>;
-	source: "live" | "snapshot";
+	source: "api" | "live" | "snapshot";
 }> {
+	if (apiPrices && Object.keys(apiPrices).length > 0) {
+		return { prices: apiPrices, source: "api" };
+	}
+
 	const live = await fetchLivePrices(signal);
 	if (live) return { prices: live, source: "live" };
 	return { prices: SNAPSHOT_PRICES, source: "snapshot" };

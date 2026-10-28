@@ -11,7 +11,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { parsePrices, priceFor, SNAPSHOT_PRICES, UNKNOWN_PRICE } from "./pricing.ts";
+import { parsePrices, priceFor, pricesFromModelList, SNAPSHOT_PRICES, UNKNOWN_PRICE } from "./pricing.ts";
 
 /** Build the `self.__next_f.push([1, "..."])` chunk wrapper Next.js emits. */
 function rsc(chunks: string[]): string {
@@ -143,4 +143,95 @@ test("snapshot is internally consistent", () => {
 
 test("UNKNOWN_PRICE is all zeros", () => {
 	assert.deepEqual(UNKNOWN_PRICE, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+});
+
+/* ------------------------------------------------------------------ *
+ * Prices published by /v1/models itself: when present, scraping is unused.
+ * ------------------------------------------------------------------ */
+
+test("pricesFromModelList reads pi's own cost shape", () => {
+	const data = [
+		{
+			id: "deepseek-ai/DeepSeek-V4.1-Flash",
+			cost: { input: 0.2, output: 0.6, cacheRead: 0.005, cacheWrite: 0 },
+		},
+	];
+
+	assert.deepEqual(pricesFromModelList(data)["deepseek-ai/DeepSeek-V4.1-Flash"], {
+		input: 0.2,
+		output: 0.6,
+		cacheRead: 0.005,
+		cacheWrite: 0,
+	});
+});
+
+test("pricesFromModelList reads OpenRouter-style pricing with string rates", () => {
+	const data = [{ id: "zai-org/GLM-5.3", pricing: { input: "0.50", output: "2.00", cache_read: "0.15" } }];
+
+	assert.deepEqual(pricesFromModelList(data)["zai-org/GLM-5.3"], {
+		input: 0.5,
+		output: 2,
+		cacheRead: 0.15,
+		cacheWrite: 0,
+	});
+});
+
+test("pricesFromModelList reads flat scalar prices", () => {
+	const data = [{ id: "Qwen/Qwen3.8-27B", input_price: "0.10", output_price: "0.40" }];
+
+	const price = pricesFromModelList(data)["Qwen/Qwen3.8-27B"];
+	assert.equal(price.input, 0.1);
+	assert.equal(price.output, 0.4);
+	assert.equal(price.cacheRead, 0);
+});
+
+test("today's Entrim response yields no API prices, so scraping still runs", () => {
+	// The real /v1/models payload: no price key of any kind.
+	const data = [
+		{
+			id: "deepseek-ai/DeepSeek-V4.1-Flash-1017",
+			object: "model",
+			created: 1677610602,
+			owned_by: "openai",
+			datacenters: [{ country_code: "SI" }],
+			beta: false,
+			max_input_tokens: 1048576,
+			max_output_tokens: 393216,
+		},
+	];
+
+	assert.deepEqual(pricesFromModelList(data), {});
+});
+
+test("a half-specified price is ignored rather than half-applied", () => {
+	// input without output is not a usable price; treating it as one would
+	// understate spend, which is the exact failure mode being fixed.
+	assert.deepEqual(pricesFromModelList([{ id: "x", cost: { input: 0.5 } }]), {});
+	assert.deepEqual(pricesFromModelList([{ id: "x", cost: { output: 0.5 } }]), {});
+});
+
+test("negative and non-finite rates are rejected", () => {
+	assert.deepEqual(pricesFromModelList([{ id: "x", cost: { input: -1, output: 2 } }]), {});
+	assert.deepEqual(
+		pricesFromModelList([{ id: "x", cost: { input: Number.NaN, output: 2 } }]),
+		{},
+	);
+	assert.deepEqual(pricesFromModelList([{ id: "x", cost: { input: "abc", output: 2 } }]), {});
+});
+
+test("entries without a usable id are skipped", () => {
+	assert.deepEqual(pricesFromModelList([{ cost: { input: 1, output: 2 } }]), {});
+	assert.deepEqual(pricesFromModelList([{ id: "", cost: { input: 1, output: 2 } }]), {});
+	assert.deepEqual(pricesFromModelList(null), {});
+	assert.deepEqual(pricesFromModelList(undefined), {});
+});
+
+test("one priced entry among unpriced ones is still used", () => {
+	const data = [
+		{ id: "a-free", max_input_tokens: 1000 },
+		{ id: "b-priced", cost: { input: 0.1, output: 0.4 } },
+	];
+
+	const prices = pricesFromModelList(data);
+	assert.deepEqual(Object.keys(prices), ["b-priced"]);
 });

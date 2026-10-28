@@ -34,13 +34,32 @@ the page's Next.js RSC payload as USD per 1M tokens:
 On every refresh this provider scrapes that page and attaches the price to each
 model.
 
+**API prices win**
+
+If a future `/v1/models` response carries prices itself, those are authoritative
+and **no scraping happens at all** - no pricing-page fetch, no snapshot. The
+following shapes are recognised, covering the conventions LiteLLM and
+OpenAI-compatible gateways use:
+
+```jsonc
+{ "id": "...", "cost":    { "input": 0.1, "output": 0.35, "cacheRead": 0.0175 } }
+{ "id": "...", "pricing": { "input": "0.10", "output": "0.35", "cache_read": "0.0175" } }
+{ "id": "...", "input_price": "0.10", "output_price": "0.35" }
+```
+
+A price counts only when **both** input and output are present and finite; a
+half-specified price is ignored rather than half-applied, since that would
+understate spend.
+
 **Scrape → snapshot → zero + warn**
 
-1. **Scrape** the live pricing page. Fresh data always wins.
-2. If the scrape fails (offline, blocked, format change), fall back to a
+1. **API prices** published by `/v1/models` itself, when present. Scraping is then
+   skipped entirely.
+2. **Scrape** the live pricing page. Fresh data always wins.
+3. If the scrape fails (offline, blocked, format change), fall back to a
    committed `SNAPSHOT_PRICES` table in `src/pricing.ts`, so a cold start still
    prices correctly.
-3. If a model is still unpriced, it gets zero rates and its id is logged as a
+4. If a model is still unpriced, it gets zero rates and its id is logged as a
    warning — pi then shows tokens with no dollar figure rather than a
    misleading `$0.000`.
 
