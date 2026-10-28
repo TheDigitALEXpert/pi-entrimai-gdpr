@@ -12,6 +12,53 @@ GDPR-compliant EU inference platform.
   context-overflow handling all come for free.
 - **Auto-discovers the model catalog** from `GET /v1/models` once a key is
   available, and **persists** it so the list is available offline on restart.
+- **Attaches real per-model prices** scraped from the Entrim pricing page, so
+  the session cost in pi's footer reflects what you are actually billed.
+
+## Pricing
+
+`GET /v1/models` publishes **no price data**. The complete key set across every
+served model is:
+
+```
+id, object, created, owned_by, datacenters, beta, max_input_tokens, max_output_tokens
+```
+
+Entrim does publish per-model prices, on <https://entrim.ai/pricing>, embedded in
+the page's Next.js RSC payload as USD per 1M tokens:
+
+```json
+{"price":{"input":"0.10","output":"0.35","cacheRead":"0.0175"},"apiModelName":"deepseek-ai/DeepSeek-V4.1-Flash"}
+```
+
+On every refresh this provider scrapes that page and attaches the price to each
+model.
+
+**Scrape → snapshot → zero + warn**
+
+1. **Scrape** the live pricing page. Fresh data always wins.
+2. If the scrape fails (offline, blocked, format change), fall back to a
+   committed `SNAPSHOT_PRICES` table in `src/pricing.ts`, so a cold start still
+   prices correctly.
+3. If a model is still unpriced, it gets zero rates and its id is logged as a
+   warning — pi then shows tokens with no dollar figure rather than a
+   misleading `$0.000`.
+
+> **Why zero rates instead of omitting `cost`?** pi's `ModelCost` requires all
+> four rates as numbers and `calculateCost()` dereferences `model.cost.input`
+> unconditionally, so a missing `cost` throws. Zero is the only expressible
+> "unknown", and pi's footer only prints a dollar amount when the accumulated
+> total is non-zero, so an unpriced model stays silent instead of claiming to
+> be free.
+
+Verify the parser against the live page at any time:
+
+```bash
+npm run pricing:check
+```
+
+This prints the scraped table, cross-checks it against `/v1/models`, and reports
+any drift between the live page and `SNAPSHOT_PRICES`.
 
 ## Install
 
@@ -51,7 +98,8 @@ pi --model entrim/deepseek-ai/DeepSeek-V4.1-Flash
    it fetches `GET /v1/models`, maps the LiteLLM-style `data` array to pi model
    configs, and returns them — pi replaces the bootstrap list with the live one.
 3. The list is persisted via `context.publish({ persist })`; on a later offline
-   start, `refreshModels` restores it before touching the network.
+   start, `refreshModels` restores it before touching the network. Prices are
+   baked into each persisted model, so an offline restart keeps real figures.
 
 ## Customization
 
@@ -63,8 +111,15 @@ registered provider.
 
 - Keep `@earendil-works/pi-ai` and `@earendil-works/pi-coding-agent` in
   `peerDependencies` (host-supplied), never in `dependencies`.
-- Model metadata (`reasoning`, `contextWindow`, `maxTokens`, `cost`) in
-  `mapModels` is heuristic — refine once real per-model specs are known.
+- Model metadata (`reasoning`, `contextWindow`, `maxTokens`) in `mapModels` is
+  still heuristic — `/v1/models` only supplies limits and a beta flag. `cost` is
+  **not** heuristic: it comes from the scraped pricing table.
+- The pricing parser keys on `apiModelName` and requires splitting records on
+  their leading `{"id":"`, because `price` appears *before* `apiModelName` in the
+  same record. A forward-only search from the name silently returns the **next**
+  model's price. `src/pricing.test.ts` locks this behaviour in.
+- `SNAPSHOT_PRICES` in `src/pricing.ts` is a fallback, not truth. Run
+  `npm run pricing:check` before a release and refresh it if drift is reported.
 - `/login entrim` interactive key login (via `oauth`) is left as a commented
   option in `extension.ts`; enable it if you want credentials stored in
   `auth.json` rather than an env var.
@@ -74,6 +129,8 @@ registered provider.
 ```bash
 npm install          # get host peer deps for type-checking
 npm run check        # tsc --noEmit
+npm test             # parser tests (offline fixtures)
+npm run pricing:check  # live scrape + /v1/models cross-check + snapshot drift
 ```
 
 Load locally while developing:
